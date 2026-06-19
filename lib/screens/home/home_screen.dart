@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import '../../widgets/heatmap_widget.dart';
 import '../../widgets/log_hours_sheet.dart';
 import '../../services/study_service.dart';
+import '../../services/realtime_service.dart';
 import '../../models/study_log.dart';
 import '../stats/stats_screen.dart';
 import '../profile/profile_screen.dart';
+import '../room/study_room_screen.dart';
 import '../../core/supabase_client.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -17,7 +19,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   final _service = StudyService();
-
+  final _realtime = RealtimeService();
   List<StudyLog> _logs = [];
   bool _loading = true;
 
@@ -25,13 +27,79 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _loadLogs();
+    _setupRealtime();
+  }
+
+  void _setupRealtime() {
+    final user = supabase.auth.currentUser;
+
+    if (user == null) {
+      debugPrint('No authenticated user');
+      return;
+    }
+
+    final userId = user.id;
+
+    _realtime.subscribeToStudyLogs(
+      userId: userId,
+      onchange: () {
+        debugPrint('🔄 Realtime: logs changed, refreshing...');
+        _loadLogs();
+      },
+    );
+
+    _realtime.subscribeToBadges(
+      userId: userId,
+      onNewBadge: (badge) {
+        if (mounted) _showBadgeNotification(badge);
+      },
+    );
+  }
+
+  void _showBadgeNotification(Map<String, dynamic> badge) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF16213E),
+        duration: const Duration(seconds: 4),
+        content: Row(
+          children: [
+            Text(
+              badge['badge_emoji'] ?? '🏆',
+              style: const TextStyle(fontSize: 28),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Badge Earned!',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF39D97E),
+                  ),
+                ),
+                Text(
+                  badge['badge_name'] ?? '',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _realtime.dispose();
+    super.dispose();
   }
 
   Future<void> _loadLogs() async {
     setState(() => _loading = true);
-
     final logs = await _service.fetchLogs();
-
     setState(() {
       _logs = logs;
       _loading = false;
@@ -43,9 +111,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => LogHoursSheet(
-        onLogged: _loadLogs,
-      ),
+      builder: (_) => LogHoursSheet(onLogged: _loadLogs),
     );
   }
 
@@ -58,16 +124,13 @@ class _HomeScreenState extends State<HomeScreen> {
         onRefresh: _loadLogs,
       ),
       StatsScreen(logs: _logs),
-      ProfileScreen(
-        logs: _logs,
-        onRefresh: _loadLogs,
-      ),
+      ProfileScreen(logs: _logs, onRefresh: _loadLogs),
+      const StudyRoomScreen(),
     ];
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
       body: screens[_currentIndex],
-
       floatingActionButton: _currentIndex == 0
           ? FloatingActionButton.extended(
         onPressed: _showLogSheet,
@@ -77,24 +140,18 @@ class _HomeScreenState extends State<HomeScreen> {
         icon: const Icon(Icons.add_rounded),
         label: const Text(
           'Log Today',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
       )
           : null,
-
       floatingActionButtonLocation:
       FloatingActionButtonLocation.centerDocked,
-
       bottomNavigationBar: Container(
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         decoration: BoxDecoration(
           color: const Color(0xFF16213E),
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: Colors.white10,
-          ),
+          border: Border.all(color: Colors.white10),
           boxShadow: const [
             BoxShadow(
               color: Colors.black45,
@@ -126,6 +183,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icon(Icons.person),
                 label: 'Profile',
               ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.people),
+                label: 'Room',
+              ),
             ],
           ),
         ),
@@ -148,13 +209,11 @@ class _DashboardTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final service = StudyService();
-
     final streak = service.calculateStreak(logs);
     final totalHours = logs.fold(0.0, (sum, log) => sum + log.hours);
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
-
       body: loading
           ? const Center(
         child: CircularProgressIndicator(
@@ -167,11 +226,12 @@ class _DashboardTab extends StatelessWidget {
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 60, 20, 120),
+            padding:
+            const EdgeInsets.fromLTRB(20, 60, 20, 120),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                /// HEADER
+                // HEADER
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(24),
@@ -186,10 +246,11 @@ class _DashboardTab extends StatelessWidget {
                     ),
                     borderRadius: BorderRadius.circular(24),
                   ),
-                  child: const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Column(
+                    crossAxisAlignment:
+                    CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      const Text(
                         '📚 Study Heatmap',
                         style: TextStyle(
                           color: Colors.black,
@@ -197,13 +258,35 @@ class _DashboardTab extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      SizedBox(height: 8),
-                      Text(
+                      const SizedBox(height: 8),
+                      const Text(
                         'Track consistency. Build streaks. Stay disciplined.',
                         style: TextStyle(
                           color: Colors.black87,
                           fontSize: 14,
                         ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: Colors.black54,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          const Text(
+                            '● Live',
+                            style: TextStyle(
+                              color: Colors.black54,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -272,15 +355,14 @@ class _DashboardTab extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: const Color(0xFF16213E),
                     borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                      color: Colors.white10,
-                    ),
+                    border: Border.all(color: Colors.white10),
                   ),
                   child: HeatmapWidget(logs: logs),
                 ),
 
                 const SizedBox(height: 30),
 
+                // Edge Function button
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
@@ -290,8 +372,7 @@ class _DashboardTab extends StatelessWidget {
                       backgroundColor: const Color(0xFF39D97E),
                       foregroundColor: Colors.black,
                       padding: const EdgeInsets.symmetric(
-                        vertical: 16,
-                      ),
+                          vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(18),
                       ),
@@ -302,28 +383,23 @@ class _DashboardTab extends StatelessWidget {
                         await supabase.functions.invoke(
                           'send-daily-report',
                         );
-
                         debugPrint(response.data.toString());
-
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(
                             SnackBar(
                               content: Text(
-                                response.data.toString(),
-                              ),
+                                  response.data.toString()),
                             ),
                           );
                         }
                       } catch (e) {
                         debugPrint(e.toString());
-
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(
                             SnackBar(
-                              content: Text(
-                                'Error: $e',
-                              ),
-                            ),
+                                content: Text('Error: $e')),
                           );
                         }
                       }
@@ -349,18 +425,12 @@ class _DashboardTab extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF16213E),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.white10,
-        ),
+        border: Border.all(color: Colors.white10),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            icon,
-            color: const Color(0xFF39D97E),
-            size: 28,
-          ),
+          Icon(icon, color: const Color(0xFF39D97E), size: 28),
           const SizedBox(height: 16),
           Text(
             value,
@@ -395,9 +465,7 @@ class _DashboardTab extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF16213E),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.white10,
-        ),
+        border: Border.all(color: Colors.white10),
       ),
       child: Row(
         children: [
@@ -407,10 +475,7 @@ class _DashboardTab extends StatelessWidget {
               color: const Color(0xFF39D97E).withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: Icon(
-              icon,
-              color: const Color(0xFF39D97E),
-            ),
+            child: Icon(icon, color: const Color(0xFF39D97E)),
           ),
           const SizedBox(width: 18),
           Column(
@@ -426,9 +491,7 @@ class _DashboardTab extends StatelessWidget {
               ),
               Text(
                 '$title • $subtitle',
-                style: const TextStyle(
-                  color: Colors.white54,
-                ),
+                style: const TextStyle(color: Colors.white54),
               ),
             ],
           ),
